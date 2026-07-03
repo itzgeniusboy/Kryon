@@ -80,9 +80,15 @@ object AdbManager {
     }
 
     // Perform Pairing (Pairing code + Port)
-    fun startPairing(ip: String = "127.0.0.1", port: Int, pairingCode: String) {
+    fun startPairing(ip: String = "127.0.0.1", port: Int, pairingCode: String, context: Context? = null, onResult: (Boolean) -> Unit = {}) {
         _status.value = AdbConnectionStatus.PAIRING
         addLog("Starting pairing connection to $ip:$port...")
+        
+        if (context != null) {
+            com.kryon.filemanager.core.SecurePreferences.saveLastAdbIp(context, ip)
+            com.kryon.filemanager.core.SecurePreferences.saveLastAdbPairPort(context, port)
+            com.kryon.filemanager.core.SecurePreferences.saveLastAdbPairCode(context, pairingCode)
+        }
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -94,23 +100,31 @@ object AdbManager {
                 if (pairingCode.length < 6) {
                     _status.value = AdbConnectionStatus.FAILED
                     addLog("Pairing failed: Code must be 6 digits.")
+                    onResult(false)
                     return@launch
                 }
 
                 _status.value = AdbConnectionStatus.PAIRED
                 addLog("SUCCESS: Device paired successfully using code $pairingCode!")
                 addLog("Authorized Client Signature registered.")
+                onResult(true)
             } catch (e: Exception) {
                 _status.value = AdbConnectionStatus.FAILED
                 addLog("Pairing error: ${e.message}")
+                onResult(false)
             }
         }
     }
 
     // Connect to Wireless Debugging port
-    fun startConnection(ip: String = "127.0.0.1", servicePort: Int) {
+    fun startConnection(ip: String = "127.0.0.1", servicePort: Int, context: Context? = null, onResult: (Boolean) -> Unit = {}) {
         _status.value = AdbConnectionStatus.CONNECTING
         addLog("Connecting to ADB daemon at $ip:$servicePort...")
+        
+        if (context != null) {
+            com.kryon.filemanager.core.SecurePreferences.saveLastAdbIp(context, ip)
+            com.kryon.filemanager.core.SecurePreferences.saveLastAdbServicePort(context, servicePort)
+        }
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -123,9 +137,40 @@ object AdbManager {
                 _status.value = AdbConnectionStatus.CONNECTED
                 addLog("CONNECTED: ADB Shell connection established as shell UID 2000.")
                 addLog("You now have full write access to Android/data and Android/obb folders.")
+                onResult(true)
             } catch (e: Exception) {
                 _status.value = AdbConnectionStatus.FAILED
                 addLog("Connection failed: Port $servicePort is unreachable. Make sure Wireless Debugging is toggled ON.")
+                onResult(false)
+            }
+        }
+    }
+
+    // Silent background reconnection logic on app start
+    fun silentReconnect(context: Context, onResult: (Boolean) -> Unit = {}) {
+        val lastIp = com.kryon.filemanager.core.SecurePreferences.getLastAdbIp(context)
+        val lastServicePort = com.kryon.filemanager.core.SecurePreferences.getLastAdbServicePort(context)
+        val lastCode = com.kryon.filemanager.core.SecurePreferences.getLastAdbPairCode(context)
+
+        if (lastCode.isEmpty()) {
+            addLog("Silent reconnect skipped: No prior pairing code found.")
+            onResult(false)
+            return
+        }
+
+        addLog("Attempting silent reconnection to $lastIp:$lastServicePort...")
+        startConnection(lastIp, lastServicePort, context) { connected ->
+            if (connected) {
+                addLog("Silent reconnect successful ✓")
+                onResult(true)
+            } else {
+                addLog("Silent reconnect failed ❌ showing interactive notification.")
+                AdbNotificationReceiver.showNotification(
+                    context,
+                    "ADB Connection Failed",
+                    "Could not reconnect to port $lastServicePort. Wireless Debugging might have restarted or changed ports. Tap to set up."
+                )
+                onResult(false)
             }
         }
     }

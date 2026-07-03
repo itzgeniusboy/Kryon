@@ -14,6 +14,10 @@ object SecurePreferences {
     private const val KEY_VAULT_PASSCODE = "vault_passcode"
     private const val KEY_VAULT_IS_INITIALIZED = "vault_is_initialized"
     private const val KEY_AUTOMATION_RULES = "automation_rules_json"
+    private const val KEY_LAST_ADB_IP = "last_adb_ip"
+    private const val KEY_LAST_ADB_PAIR_PORT = "last_adb_pair_port"
+    private const val KEY_LAST_ADB_SERVICE_PORT = "last_adb_service_port"
+    private const val KEY_LAST_ADB_PAIR_CODE = "last_adb_pair_code"
 
     // Simple robust local obfuscation/encryption to satisfy "stored encrypted" without bringing in bulky security dependencies
     private val AES_KEY = "KryonSecretKey_2026_Developer_AP".toByteArray() // 32-bytes
@@ -108,5 +112,46 @@ object SecurePreferences {
     fun saveAutomationRulesJson(context: Context, json: String) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_AUTOMATION_RULES, json).apply()
+    }
+
+    fun getLastAdbIp(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_LAST_ADB_IP, "127.0.0.1") ?: "127.0.0.1"
+    }
+
+    fun saveLastAdbIp(context: Context, ip: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LAST_ADB_IP, ip).apply()
+    }
+
+    fun getLastAdbPairPort(context: Context): Int {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getInt(KEY_LAST_ADB_PAIR_PORT, 37219)
+    }
+
+    fun saveLastAdbPairPort(context: Context, port: Int) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putInt(KEY_LAST_ADB_PAIR_PORT, port).apply()
+    }
+
+    fun getLastAdbServicePort(context: Context): Int {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getInt(KEY_LAST_ADB_SERVICE_PORT, 41515)
+    }
+
+    fun saveLastAdbServicePort(context: Context, port: Int) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putInt(KEY_LAST_ADB_SERVICE_PORT, port).apply()
+    }
+
+    fun getLastAdbPairCode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val encrypted = prefs.getString(KEY_LAST_ADB_PAIR_CODE, "") ?: ""
+        return if (encrypted.isNotEmpty()) decrypt(encrypted) else ""
+    }
+
+    fun saveLastAdbPairCode(context: Context, code: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LAST_ADB_PAIR_CODE, encrypt(code)).apply()
     }
 }

@@ -21,6 +21,9 @@ data class FileItem(
     val isVideo: Boolean
         get() = extension.lowercase() in listOf("mp4", "mkv", "avi", "mov", "webm", "3gp")
 
+    val isAudio: Boolean
+        get() = extension.lowercase() in listOf("mp3", "wav", "m4a", "ogg", "flac", "aac", "amr", "wma")
+
     val isText: Boolean
         get() = extension.lowercase() in listOf("txt", "json", "xml", "html", "css", "js", "ts", "kt", "java", "properties", "sh", "py", "cpp", "h", "c", "md", "yaml", "yml", "gradle", "kts", "prop", "conf")
 

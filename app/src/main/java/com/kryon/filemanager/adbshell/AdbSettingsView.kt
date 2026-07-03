@@ -71,7 +71,8 @@ fun AdbSettingsView(
                     Text(
                         text = "1. Toggle ON \"Developer Options\" and \"Wireless Debugging\" in System Settings.\n" +
                                "2. Tap \"Pair device with pairing code\" inside Wireless Debugging.\n" +
-                               "3. Enter the IP, Pairing Port, and Pairing Code below.",
+                               "3. Enter the IP, Pairing Port, and Pairing Code below.\n\n" +
+                               "⚠️ NOTE: Reconnection is required after device reboot due to Android's security design. This is a standard system level constraint, not an application bug.",
                         fontSize = 12.sp,
                         color = Color.LightGray,
                         lineHeight = 18.sp
@@ -152,7 +153,7 @@ fun AdbSettingsView(
                     Button(
                         onClick = {
                             val portInt = pairingPort.toIntOrNull() ?: 0
-                            AdbManager.startPairing(ipAddress, portInt, pairingCode)
+                            AdbManager.startPairing(ipAddress, portInt, pairingCode, context)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = pairingCode.isNotEmpty() && status != AdbConnectionStatus.PAIRING
@@ -187,7 +188,7 @@ fun AdbSettingsView(
                         Button(
                             onClick = {
                                 val portInt = servicePort.toIntOrNull() ?: 0
-                                AdbManager.startConnection(ipAddress, portInt)
+                                AdbManager.startConnection(ipAddress, portInt, context)
                             },
                             modifier = Modifier.weight(1f),
                             enabled = status != AdbConnectionStatus.CONNECTING && status != AdbConnectionStatus.CONNECTED

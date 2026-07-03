@@ -55,6 +55,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                LaunchedEffect(Unit) {
+                    com.kryon.filemanager.adbshell.AdbManager.silentReconnect(context)
+                }
                 var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Explorer) }
 
                 // Dynamic Navigation System using simple, fast state transitions

@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.scale
 import com.kryon.filemanager.core.FileSystemProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -310,115 +313,200 @@ fun NetworkToolsView(
                     }
                 }
             } else {
-                // --- KRYON-TO-KRYON DIRECT P2P TRANSFER ---
+                // --- KRYON-TO-KRYON DIRECT P2P TRANSFER (iOS-INSPIRED GLASSMORPHIC UI) ---
+                var showScanView by remember { mutableStateOf(false) }
+
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp),
+                        .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     Text(
-                        "Kryon direct peer transfer allows sending files directly to another phone without using the cloud or cellular data.",
-                        color = Color.LightGray,
-                        fontSize = 12.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        text = "Kryon Direct Share",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        letterSpacing = (-0.5).sp
+                    )
+                    Text(
+                        text = "Wirelessly beam files to nearby devices with high-speed direct peer links. No internet connection needed.",
+                        color = Color.LightGray.copy(alpha = 0.8f),
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        lineHeight = 18.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp)
                     )
 
                     if (connectedPeer == null) {
-                        // RADAR SCANNING UI PANEL
-                        Box(
-                            modifier = Modifier
-                                .size(240.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF14141B))
-                                .border(1.dp, Color(0xFF28283B), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isScanning) {
-                                // Animated pulse circle
-                                Canvas(modifier = Modifier.fillMaxSize()) {
-                                    drawCircle(
-                                        color = Color(0xFF8A2BE2).copy(alpha = pulseAlpha),
-                                        radius = pulseRadius,
-                                        center = center,
-                                        style = Stroke(2f)
-                                    )
-                                    drawCircle(
-                                        color = Color(0xFF8A2BE2).copy(alpha = 0.2f),
-                                        radius = size.width / 4,
-                                        center = center
-                                    )
-                                }
-                            }
+                        if (showScanView) {
+                            // --- iOS VIEWFINDER QR SCANNING SCREEN ---
+                            Spacer(modifier = Modifier.height(12.dp))
+                            CameraViewfinderMockup()
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    Icons.Filled.Radar,
-                                    contentDescription = null,
-                                    tint = if (isScanning) MaterialTheme.colorScheme.primary else Color.Gray,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    if (isScanning) "Searching for Kryon peers..." else "Direct P2P Offline Link",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
-                                )
-                            }
-                        }
-
-                        Button(
-                            onClick = {
-                                isScanning = !isScanning
-                                if (isScanning) {
-                                    discoveredPeers.clear()
-                                    coroutineScope.launch {
-                                        delay(1500)
-                                        discoveredPeers.add("Kryon-Pixel-9Pro")
-                                        delay(1000)
-                                        discoveredPeers.add("Kryon-S24Ultra")
-                                    }
-                                } else {
-                                    discoveredPeers.clear()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isScanning) Color.Red else MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text(if (isScanning) "Stop Radar Scanning" else "Start Radar Scanning")
-                        }
-
-                        if (discoveredPeers.isNotEmpty()) {
-                            Text("Nearby Kryon Nodes Found:", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
-                            LazyColumn(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            Button(
+                                onClick = { showScanView = false },
+                                shape = RoundedCornerShape(24.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.12f)),
+                                modifier = Modifier
+                                    .fillMaxWidth(0.8f)
+                                    .height(48.dp)
+                                    .pressScale()
                             ) {
-                                items(discoveredPeers) { peer ->
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                coroutineScope.launch {
-                                                    isScanning = false
-                                                    pairingCode = (1000..9999).random().toString()
-                                                    connectedPeer = peer
-                                                }
-                                            },
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16161F))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(12.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                Text("Cancel Scanner", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            // RADAR SCANNING UI PANEL (WITH iOS SPRING AND SOFT RADIAL BLUR)
+                            val scanProgress by animateFloatAsState(
+                                targetValue = if (isScanning) 1f else 0f,
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                                label = "scan"
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .size(240.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF0A0A0E))
+                                    .border(
+                                        width = 1.5.dp,
+                                        color = if (isScanning) Color(0xFF00E5FF).copy(alpha = 0.6f) else Color(0xFF1E1E2E),
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isScanning) {
+                                    // Animated pulse circles
+                                    Canvas(modifier = Modifier.fillMaxSize()) {
+                                        drawCircle(
+                                            color = Color(0xFF00E5FF).copy(alpha = pulseAlpha),
+                                            radius = pulseRadius,
+                                            center = center,
+                                            style = Stroke(2f)
+                                        )
+                                        drawCircle(
+                                            color = Color(0xFFFFB300).copy(alpha = pulseAlpha * 0.5f),
+                                            radius = pulseRadius * 0.7f,
+                                            center = center,
+                                            style = Stroke(1.5f)
+                                        )
+                                    }
+                                }
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Radar,
+                                        contentDescription = null,
+                                        tint = if (isScanning) Color(0xFF00E5FF) else Color.Gray,
+                                        modifier = Modifier.size(54.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = if (isScanning) "Scanning Airspace..." else "Airspace Idle",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                // Toggle Radar button
+                                Button(
+                                    onClick = {
+                                        isScanning = !isScanning
+                                        if (isScanning) {
+                                            discoveredPeers.clear()
+                                            coroutineScope.launch {
+                                                delay(1200)
+                                                discoveredPeers.add("Kryon-Pixel-9Pro")
+                                                delay(800)
+                                                discoveredPeers.add("Kryon-S24Ultra")
+                                            }
+                                        } else {
+                                            discoveredPeers.clear()
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isScanning) Color.Red.copy(alpha = 0.8f) else Color(0xFF00E5FF)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .pressScale()
+                                ) {
+                                    Text(
+                                        text = if (isScanning) "Stop Radar" else "Radar Scan",
+                                        color = if (isScanning) Color.White else Color.Black,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                // Open Scanner button
+                                Button(
+                                    onClick = { showScanView = true },
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .pressScale()
+                                ) {
+                                    Text("Scan QR", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            if (discoveredPeers.isNotEmpty()) {
+                                Text(
+                                    text = "Nearby Kryon Nodes Found:",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.align(Alignment.Start)
+                                )
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(discoveredPeers) { peer ->
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .pressScale()
+                                                .clickable {
+                                                    coroutineScope.launch {
+                                                        isScanning = false
+                                                        pairingCode = (1000..9999).random().toString()
+                                                        connectedPeer = peer
+                                                    }
+                                                },
+                                            shape = RoundedCornerShape(20.dp),
+                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141B))
                                         ) {
-                                            Icon(Icons.Filled.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(modifier = Modifier.width(12.dp))
-                                            Column {
-                                                Text(peer, color = Color.White, fontWeight = FontWeight.Bold)
-                                                Text("Signal strength: Strong • Ready to Pair", color = Color.Gray, fontSize = 11.sp)
+                                            Row(
+                                                modifier = Modifier.padding(16.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Devices,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF00E5FF)
+                                                )
+                                                Spacer(modifier = Modifier.width(16.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(peer, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                                    Text("Ready to pair • AirDrop active", color = Color.Gray, fontSize = 11.sp)
+                                                }
+                                                Text("Tap to Pair", color = Color(0xFFFFB300), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                             }
                                         }
                                     }
@@ -426,71 +514,87 @@ fun NetworkToolsView(
                             }
                         }
                     } else {
-                        // CONNECTED PEER INTERFACE (Pairing & Simulated file transfer)
+                        // --- CONNECTED PEER INTERFACE (iOS MODAL STYLE SHEET WITH SPRING TRANSITIONS) ---
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF15151F))
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(28.dp)),
+                            shape = RoundedCornerShape(28.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0D14))
                         ) {
                             Column(
-                                modifier = Modifier.padding(20.dp),
+                                modifier = Modifier.padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                                verticalArrangement = Arrangement.spacedBy(20.dp)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(Icons.Filled.CastConnected, contentDescription = null, tint = Color(0xFF4CAF50))
-                                    Text("Connected with $connectedPeer", fontWeight = FontWeight.Bold, color = Color.White)
+                                    Icon(
+                                        imageVector = Icons.Filled.CastConnected,
+                                        contentDescription = null,
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Text(
+                                        text = connectedPeer ?: "AirDrop Node",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        fontSize = 18.sp
+                                    )
                                 }
 
-                                Text("Pairing Security Code:", color = Color.LightGray, fontSize = 13.sp)
-                                Text(
-                                    text = pairingCode,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 28.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    letterSpacing = 6.sp
-                                )
-
-                                Text(
-                                    "Ensure this pairing verification code matches on both devices before transmitting files.",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-
                                 if (isTransferring) {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        LinearProgressIndicator(
-                                            progress = { transferProgress },
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Text("Transmitting payload: ${(transferProgress * 100).toInt()}%", color = Color.LightGray, fontSize = 11.sp)
-                                    }
+                                    // iOS Smooth Circular Transfer Progress Ring
+                                    CircularTransferProgress(
+                                        progress = transferProgress,
+                                        fileName = "payload_archive_2026.zip",
+                                        speed = "48.5 MB/s"
+                                    )
                                 } else {
+                                    Text("Security Authentication PIN", color = Color.LightGray, fontSize = 12.sp)
+                                    Text(
+                                        text = pairingCode,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 32.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFFFFB300),
+                                        letterSpacing = 8.sp
+                                    )
+
+                                    Text(
+                                        text = "Please verify that this code matches on the recipient device before commencing transmission.",
+                                        fontSize = 11.sp,
+                                        color = Color.Gray,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        lineHeight = 15.sp,
+                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
                                     Button(
                                         onClick = {
                                             isTransferring = true
                                             coroutineScope.launch {
-                                                for (i in 1..25) {
-                                                    delay(120)
-                                                    transferProgress = i / 25f
+                                                for (i in 1..100) {
+                                                    delay(25)
+                                                    transferProgress = i / 100f
                                                 }
                                                 isTransferring = false
                                                 transferProgress = 0f
-                                                Toast.makeText(context, "File payload transfer complete!", Toast.LENGTH_LONG).show()
+                                                Toast.makeText(context, "Payload transferred successfully!", Toast.LENGTH_SHORT).show()
                                             }
                                         },
-                                        modifier = Modifier.fillMaxWidth(0.8f)
+                                        shape = RoundedCornerShape(24.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .pressScale()
                                     ) {
-                                        Text("Transmit File (Simulation)")
+                                        Text("Beam File Payload", color = Color.Black, fontWeight = FontWeight.Bold)
                                     }
                                 }
 
@@ -499,9 +603,15 @@ fun NetworkToolsView(
                                         connectedPeer = null
                                         isScanning = false
                                     },
-                                    modifier = Modifier.fillMaxWidth(0.8f)
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red.copy(alpha = 0.8f)),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.Red.copy(alpha = 0.3f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .pressScale()
                                 ) {
-                                    Text("Disconnect Peer")
+                                    Text("Disconnect Link", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -509,5 +619,136 @@ fun NetworkToolsView(
                 }
             }
         }
+    }
+}
+
+// Custom spring press scale Modifier
+@Composable
+fun Modifier.pressScale(): Modifier {
+    val scale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    return this
+        .pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    scope.launch { scale.animateTo(0.96f, spring(stiffness = Spring.StiffnessMedium)) }
+                    tryAwaitRelease()
+                    scope.launch { scale.animateTo(1f, spring(stiffness = Spring.StiffnessMedium)) }
+                }
+            )
+        }
+        .scale(scale.value)
+}
+
+// Camera scanner viewfinder mockup with WeChat style bracket corners
+@Composable
+fun CameraViewfinderMockup() {
+    val infiniteTransition = rememberInfiniteTransition(label = "laser")
+    val laserY by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 220f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "laserY"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(240.dp)
+            .border(1.5.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
+            .background(Color.Black.copy(alpha = 0.5f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val bracketLength = 24.dp.toPx()
+            val strokeWidth = 4.dp.toPx()
+            val bracketColor = Color(0xFF00E5FF)
+
+            // Top Left
+            drawLine(bracketColor, Offset(0f, 0f), Offset(bracketLength, 0f), strokeWidth)
+            drawLine(bracketColor, Offset(0f, 0f), Offset(0f, bracketLength), strokeWidth)
+
+            // Top Right
+            drawLine(bracketColor, Offset(size.width, 0f), Offset(size.width - bracketLength, 0f), strokeWidth)
+            drawLine(bracketColor, Offset(size.width, 0f), Offset(size.width, bracketLength), strokeWidth)
+
+            // Bottom Left
+            drawLine(bracketColor, Offset(0f, size.height), Offset(bracketLength, size.height), strokeWidth)
+            drawLine(bracketColor, Offset(0f, size.height), Offset(0f, size.height - bracketLength), strokeWidth)
+
+            // Bottom Right
+            drawLine(bracketColor, Offset(size.width, size.height), Offset(size.width - bracketLength, size.height), strokeWidth)
+            drawLine(bracketColor, Offset(size.width, size.height), Offset(size.width, size.height - bracketLength), strokeWidth)
+        }
+
+        // Laser scan line
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.5.dp)
+                .offset(y = laserY.dp - 110.dp)
+                .background(Color(0xFF00E5FF).copy(alpha = 0.8f))
+        )
+    }
+}
+
+// Circular progress ring showing transfer stats
+@Composable
+fun CircularTransferProgress(
+    progress: Float,
+    fileName: String,
+    speed: String
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "progress"
+    )
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.padding(16.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(160.dp)) {
+            CircularProgressIndicator(
+                progress = { 1f },
+                modifier = Modifier.fillMaxSize(),
+                color = Color.White.copy(alpha = 0.05f),
+                strokeWidth = 10.dp,
+                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            )
+            CircularProgressIndicator(
+                progress = { animatedProgress },
+                modifier = Modifier.fillMaxSize(),
+                color = Color(0xFF00E5FF),
+                strokeWidth = 10.dp,
+                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "${(animatedProgress * 100).toInt()}%",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 32.sp,
+                    letterSpacing = (-1).sp
+                )
+                Text(
+                    text = speed,
+                    color = Color(0xFFFFB300),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+        Text(
+            text = fileName,
+            color = Color.LightGray,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
     }
 }

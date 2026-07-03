@@ -15,6 +15,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.scale
+import kotlinx.coroutines.delay
+import androidx.compose.animation.core.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -60,7 +66,9 @@ enum class ExplorerDialog {
     PROPERTIES,
     CHMOD,
     ZIP_COMPRESS,
-    ZIP_EXTRACT
+    ZIP_EXTRACT,
+    BATCH_RENAME,
+    MEDIA_PLAYER
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -109,6 +117,16 @@ fun ExplorerView(
     var targetFile by remember { mutableStateOf<FileItem?>(null) }
     var dialogInputName by remember { mutableStateOf("") }
     var dialogInputChmod by remember { mutableStateOf("755") }
+
+    // Batch Rename States
+    var batchRenamePattern by remember { mutableStateOf("{name}_###") }
+    var batchRenamePrefix by remember { mutableStateOf("") }
+    var batchRenameSuffix by remember { mutableStateOf("") }
+    var batchRenameFind by remember { mutableStateOf("") }
+    var batchRenameReplace by remember { mutableStateOf("") }
+    var isRegexEnabled by remember { mutableStateOf(false) }
+    var numberingStart by remember { mutableStateOf(1) }
+    var lastRenameList by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
 
     // Smart Features UI Toggles
     var showCommandPalette by remember { mutableStateOf(false) }
@@ -791,7 +809,11 @@ fun ExplorerView(
                                     targetFile = item
                                     showContextActionSheet = true
                                 },
-                                onFocused = { activePane = ActivePane.A }
+                                onFocused = { activePane = ActivePane.A },
+                                onOpenMediaPlayer = { item ->
+                                    targetFile = item
+                                    activeDialog = ExplorerDialog.MEDIA_PLAYER
+                                }
                             )
                         }
 
@@ -821,7 +843,11 @@ fun ExplorerView(
                                     targetFile = item
                                     showContextActionSheet = true
                                 },
-                                onFocused = { activePane = ActivePane.B }
+                                onFocused = { activePane = ActivePane.B },
+                                onOpenMediaPlayer = { item ->
+                                    targetFile = item
+                                    activeDialog = ExplorerDialog.MEDIA_PLAYER
+                                }
                             )
                         }
                     }
@@ -842,7 +868,11 @@ fun ExplorerView(
                             targetFile = item
                             showContextActionSheet = true
                         },
-                        onFocused = {}
+                        onFocused = {},
+                        onOpenMediaPlayer = { item ->
+                            targetFile = item
+                            activeDialog = ExplorerDialog.MEDIA_PLAYER
+                        }
                     )
                 }
 
@@ -926,10 +956,59 @@ fun ExplorerView(
                                     Icon(Icons.Default.Archive, contentDescription = "Compress into zip")
                                 }
 
+                                // BATCH RENAME
+                                IconButton(onClick = {
+                                    activeDialog = ExplorerDialog.BATCH_RENAME
+                                }) {
+                                    Icon(Icons.Default.DriveFileRenameOutline, contentDescription = "Batch Rename selected files", tint = Color(0xFF00E5FF))
+                                }
+
                                 // Clear selection
                                 TextButton(onClick = { selectedPaths.clear() }) {
                                     Text("Cancel")
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Undo Batch Rename Bar
+                if (lastRenameList != null) {
+                    Card(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 150.dp, start = 16.dp, end = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1F1F29)),
+                        border = BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.4f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = "Batch Rename complete.", color = Color.White, fontSize = 13.sp)
+                            TextButton(onClick = {
+                                coroutineScope.launch {
+                                    val listToUndo = lastRenameList
+                                    if (listToUndo != null) {
+                                        statusLog = "Undoing batch rename..."
+                                        // Undo in reverse order
+                                        for (pair in listToUndo.reversed()) {
+                                            val currentPath = pair.second
+                                            val originalPath = pair.first
+                                            val originalName = originalPath.substringAfterLast('/')
+                                            FileSystemProvider.rename(currentPath, originalName)
+                                        }
+                                        lastRenameList = null
+                                        reloadFiles()
+                                        statusLog = "Batch rename undone."
+                                    }
+                                }
+                            }) {
+                                Text("Undo", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
+                            }
+                            IconButton(onClick = { lastRenameList = null }) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.Gray, modifier = Modifier.size(16.dp))
                             }
                         }
                     }
@@ -1132,6 +1211,469 @@ fun ExplorerView(
                             },
                             dismissButton = {
                                 TextButton(onClick = { activeDialog = ExplorerDialog.NONE }) { Text("Cancel") }
+                            }
+                        )
+                    }
+                }
+
+                ExplorerDialog.BATCH_RENAME -> {
+                    AlertDialog(
+                        onDismissRequest = { activeDialog = ExplorerDialog.NONE },
+                        title = { Text("Batch Rename ${selectedPaths.size} Files", color = Color.White) },
+                        text = {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    "Use pattern {name} for original file name, ### for sequential numbering.",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                                
+                                OutlinedTextField(
+                                    value = batchRenamePattern,
+                                    onValueChange = { batchRenamePattern = it },
+                                    label = { Text("Pattern") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = batchRenamePrefix,
+                                        onValueChange = { batchRenamePrefix = it },
+                                        label = { Text("Prefix") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    OutlinedTextField(
+                                        value = batchRenameSuffix,
+                                        onValueChange = { batchRenameSuffix = it },
+                                        label = { Text("Suffix") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedTextField(
+                                        value = batchRenameFind,
+                                        onValueChange = { batchRenameFind = it },
+                                        label = { Text("Find Text") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    OutlinedTextField(
+                                        value = batchRenameReplace,
+                                        onValueChange = { batchRenameReplace = it },
+                                        label = { Text("Replace") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = isRegexEnabled,
+                                            onCheckedChange = { isRegexEnabled = it }
+                                        )
+                                        Text("Use Regex", fontSize = 12.sp, color = Color.LightGray)
+                                    }
+                                    
+                                    OutlinedTextField(
+                                        value = numberingStart.toString(),
+                                        onValueChange = { numberingStart = it.toIntOrNull() ?: 1 },
+                                        label = { Text("Start Num") },
+                                        singleLine = true,
+                                        modifier = Modifier.width(100.dp)
+                                    )
+                                }
+
+                                Divider(color = Color.White.copy(alpha = 0.12f))
+
+                                Text(
+                                    "LIVE PREVIEW:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF00E5FF)
+                                )
+
+                                selectedPaths.forEachIndexed { index, path ->
+                                    val originalName = path.substringAfterLast('/')
+                                    
+                                    var resultName = originalName
+                                    if (batchRenameFind.isNotEmpty()) {
+                                        resultName = if (isRegexEnabled) {
+                                            try {
+                                                resultName.replace(Regex(batchRenameFind), batchRenameReplace)
+                                            } catch (e: Exception) {
+                                                resultName
+                                            }
+                                        } else {
+                                            resultName.replace(batchRenameFind, batchRenameReplace)
+                                        }
+                                    }
+                                    if (batchRenamePattern.isNotEmpty()) {
+                                        val ext = originalName.substringAfterLast('.', "")
+                                        val baseName = originalName.substringBeforeLast('.')
+                                        val formattedNumber = String.format("%03d", numberingStart + index)
+                                        resultName = batchRenamePattern
+                                            .replace("{name}", baseName)
+                                            .replace("###", formattedNumber)
+                                            .replace("{num}", formattedNumber)
+                                        if (ext.isNotEmpty() && !resultName.contains(".")) {
+                                            resultName = "$resultName.$ext"
+                                        }
+                                    }
+                                    if (batchRenamePrefix.isNotEmpty() || batchRenameSuffix.isNotEmpty()) {
+                                        val ext = resultName.substringAfterLast('.', "")
+                                        val baseName = resultName.substringBeforeLast('.')
+                                        resultName = "$batchRenamePrefix$baseName$batchRenameSuffix"
+                                        if (ext.isNotEmpty()) {
+                                            resultName = "$resultName.$ext"
+                                        }
+                                    }
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp))
+                                            .padding(8.dp)
+                                    ) {
+                                        Text(originalName, color = Color.Gray, fontSize = 11.sp)
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDownward,
+                                            contentDescription = null,
+                                            tint = Color(0xFFFFB300),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(resultName, color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val renameHistory = mutableListOf<Pair<String, String>>()
+                                        
+                                        selectedPaths.forEachIndexed { index, path ->
+                                            val originalName = path.substringAfterLast('/')
+                                            val parentDir = path.substringBeforeLast('/')
+                                            
+                                            var resultName = originalName
+                                            if (batchRenameFind.isNotEmpty()) {
+                                                resultName = if (isRegexEnabled) {
+                                                    try {
+                                                        resultName.replace(Regex(batchRenameFind), batchRenameReplace)
+                                                    } catch (e: Exception) {
+                                                        resultName
+                                                    }
+                                                } else {
+                                                    resultName.replace(batchRenameFind, batchRenameReplace)
+                                                }
+                                            }
+                                            if (batchRenamePattern.isNotEmpty()) {
+                                                val ext = originalName.substringAfterLast('.', "")
+                                                val baseName = originalName.substringBeforeLast('.')
+                                                val formattedNumber = String.format("%03d", numberingStart + index)
+                                                resultName = batchRenamePattern
+                                                    .replace("{name}", baseName)
+                                                    .replace("###", formattedNumber)
+                                                    .replace("{num}", formattedNumber)
+                                                if (ext.isNotEmpty() && !resultName.contains(".")) {
+                                                    resultName = "$resultName.$ext"
+                                                }
+                                            }
+                                            if (batchRenamePrefix.isNotEmpty() || batchRenameSuffix.isNotEmpty()) {
+                                                val ext = resultName.substringAfterLast('.', "")
+                                                val baseName = resultName.substringBeforeLast('.')
+                                                resultName = "$batchRenamePrefix$baseName$batchRenameSuffix"
+                                                if (ext.isNotEmpty()) {
+                                                    resultName = "$resultName.$ext"
+                                                }
+                                            }
+                                            
+                                            val newPath = "$parentDir/$resultName"
+                                            if (path != newPath) {
+                                                val ok = FileSystemProvider.rename(path, resultName)
+                                                if (ok) {
+                                                    renameHistory.add(Pair(path, newPath))
+                                                }
+                                            }
+                                        }
+                                        
+                                        if (renameHistory.isNotEmpty()) {
+                                            lastRenameList = renameHistory
+                                            statusLog = "Renamed ${renameHistory.size} files successfully."
+                                        }
+                                        selectedPaths.clear()
+                                        reloadFiles()
+                                        activeDialog = ExplorerDialog.NONE
+                                    }
+                                }
+                            ) { Text("Apply Batch") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { activeDialog = ExplorerDialog.NONE }) { Text("Cancel") }
+                        }
+                    )
+                }
+
+                ExplorerDialog.MEDIA_PLAYER -> {
+                    val item = targetFile
+                    if (item != null) {
+                        val mediaPlayer = remember { android.media.MediaPlayer() }
+                        var isPlaying by remember { mutableStateOf(false) }
+                        var currentPosition by remember { mutableStateOf(0) }
+                        var duration by remember { mutableStateOf(0) }
+                        var playbackSpeed by remember { mutableStateOf(1.0f) }
+                        var isSpeedDropdownExpanded by remember { mutableStateOf(false) }
+                        
+                        LaunchedEffect(isPlaying) {
+                            if (isPlaying) {
+                                while (true) {
+                                    try {
+                                        currentPosition = mediaPlayer.currentPosition
+                                    } catch (e: Exception) {}
+                                    delay(250)
+                                }
+                            }
+                        }
+                        
+                        DisposableEffect(item) {
+                            try {
+                                mediaPlayer.reset()
+                                mediaPlayer.setDataSource(item.path)
+                                mediaPlayer.prepare()
+                                duration = mediaPlayer.duration
+                                mediaPlayer.start()
+                                isPlaying = true
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "Playback error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            
+                            onDispose {
+                                try {
+                                    mediaPlayer.stop()
+                                    mediaPlayer.release()
+                                } catch (e: Exception) {}
+                            }
+                        }
+
+                        AlertDialog(
+                            onDismissRequest = { activeDialog = ExplorerDialog.NONE },
+                            title = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (item.isAudio) Icons.Default.MusicNote else Icons.Default.VideoLibrary,
+                                        contentDescription = null,
+                                        tint = Color(0xFF00E5FF)
+                                    )
+                                    Text(
+                                        text = if (item.isAudio) "Audio Player" else "Video Player",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.sp
+                                    )
+                                }
+                            },
+                            text = {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = item.name,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    
+                                    val infiniteTransition = rememberInfiniteTransition(label = "visualizer")
+                                    val scaleFactor by infiniteTransition.animateFloat(
+                                        initialValue = 1f,
+                                        targetValue = if (isPlaying) 1.25f else 1f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(800, easing = FastOutSlowInEasing),
+                                            repeatMode = RepeatMode.Reverse
+                                        ),
+                                        label = "visualizerScale"
+                                    )
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .size(110.dp)
+                                            .scale(scaleFactor)
+                                            .background(
+                                                color = Color(0xFF00E5FF).copy(alpha = 0.1f),
+                                                shape = CircleShape
+                                            )
+                                            .border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (item.isAudio) Icons.Default.Audiotrack else Icons.Default.PlayCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFF00E5FF),
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                    }
+
+                                    if (item.isVideo) {
+                                        Text(
+                                            "Playing background audio stream",
+                                            color = Color.Gray,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+
+                                    fun formatMillis(ms: Int): String {
+                                        val totalSecs = ms / 1000
+                                        val mins = totalSecs / 60
+                                        val secs = totalSecs % 60
+                                        return String.format("%02d:%02d", mins, secs)
+                                    }
+
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Slider(
+                                            value = currentPosition.toFloat(),
+                                            onValueChange = { newVal ->
+                                                try {
+                                                    mediaPlayer.seekTo(newVal.toInt())
+                                                    currentPosition = newVal.toInt()
+                                                } catch (e: Exception) {}
+                                            },
+                                            valueRange = 0f..(if (duration > 0) duration.toFloat() else 100f),
+                                            colors = SliderDefaults.colors(
+                                                activeTrackColor = Color(0xFF00E5FF),
+                                                thumbColor = Color(0xFFFFB300)
+                                            )
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = formatMillis(currentPosition),
+                                                color = Color.Gray,
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            Text(
+                                                text = formatMillis(duration),
+                                                color = Color.Gray,
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box {
+                                            TextButton(onClick = { isSpeedDropdownExpanded = true }) {
+                                                Text("${playbackSpeed}x", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
+                                            }
+                                            DropdownMenu(
+                                                expanded = isSpeedDropdownExpanded,
+                                                onDismissRequest = { isSpeedDropdownExpanded = false }
+                                            ) {
+                                                listOf(0.5f, 1.0f, 1.5f, 2.0f).forEach { speed ->
+                                                    DropdownMenuItem(
+                                                        text = { Text("${speed}x") },
+                                                        onClick = {
+                                                            try {
+                                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                                                    val params = mediaPlayer.playbackParams
+                                                                    params.speed = speed
+                                                                    mediaPlayer.playbackParams = params
+                                                                    playbackSpeed = speed
+                                                                }
+                                                            } catch (e: Exception) {}
+                                                            isSpeedDropdownExpanded = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        FloatingActionButton(
+                                            onClick = {
+                                                try {
+                                                    if (mediaPlayer.isPlaying) {
+                                                        mediaPlayer.pause()
+                                                        isPlaying = false
+                                                    } else {
+                                                        mediaPlayer.start()
+                                                        isPlaying = true
+                                                    }
+                                                } catch (e: Exception) {}
+                                            },
+                                            containerColor = Color(0xFF00E5FF),
+                                            contentColor = Color.Black,
+                                            shape = CircleShape,
+                                            modifier = Modifier.size(56.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                try {
+                                                    mediaPlayer.pause()
+                                                    mediaPlayer.seekTo(0)
+                                                    currentPosition = 0
+                                                    isPlaying = false
+                                                } catch (e: Exception) {}
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Stop,
+                                                contentDescription = "Stop",
+                                                tint = Color.Red,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                Button(
+                                    onClick = { activeDialog = ExplorerDialog.NONE }
+                                ) {
+                                    Text("Close Player")
+                                }
                             }
                         )
                     }
@@ -1474,7 +2016,8 @@ fun PaneList(
     onOpenSqliteEditor: (String) -> Unit,
     onOpenApkTools: (String?) -> Unit,
     onFileLongClicked: (FileItem) -> Unit,
-    onFocused: () -> Unit
+    onFocused: () -> Unit,
+    onOpenMediaPlayer: ((FileItem) -> Unit)? = null
 ) {
     if (files.isEmpty()) {
         Box(
@@ -1515,6 +2058,9 @@ fun PaneList(
                                     } else {
                                         // Open specific editors depending on files extension
                                         when {
+                                            item.isAudio || item.isVideo -> {
+                                                onOpenMediaPlayer?.invoke(item)
+                                            }
                                             item.isText -> onOpenTextEditor(item.path)
                                             item.isDb -> onOpenSqliteEditor(item.path)
                                             item.isApk -> onOpenApkTools(item.path)
