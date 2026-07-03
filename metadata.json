@@ -1,0 +1,6 @@
+{
+  "name": "Kryon",
+  "description": "Kryon is an all-in-one advanced developer file toolkit, providing native file management, terminal, hex editor, sqlite viewer, and wireless debugging capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
