@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <!-- Scoped Queries instead of QUERY_ALL_PACKAGES to comply with Google Play policies -->
     <queries>
@@ -53,6 +55,11 @@
                 <action android:name="com.kryon.filemanager.adbshell.ACTION_CONNECT" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".features.media.MediaPlaybackService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
     </application>
 
 </manifest>

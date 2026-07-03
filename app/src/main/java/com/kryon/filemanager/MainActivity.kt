@@ -27,6 +27,7 @@ import com.kryon.filemanager.features.network.NetworkToolsView
 import com.kryon.filemanager.features.automation.AutomationEngineView
 import com.kryon.filemanager.features.productivity.ProductivitySuiteView
 import com.kryon.filemanager.features.search.SmartSearchView
+import com.kryon.filemanager.features.cleanup.StorageCleanupView
 import com.kryon.filemanager.ui.theme.MyApplicationTheme
 
 sealed interface AppScreen {
@@ -41,6 +42,7 @@ sealed interface AppScreen {
     object AutomationEngine : AppScreen
     data class ProductivitySuite(val initialPath: String = "") : AppScreen
     data class SmartSearch(val path: String) : AppScreen
+    object StorageCleanup : AppScreen
 }
 
 class MainActivity : ComponentActivity() {
@@ -74,7 +76,8 @@ class MainActivity : ComponentActivity() {
                             onOpenNetworkTools = { currentScreen = AppScreen.NetworkTools },
                             onOpenAutomationEngine = { currentScreen = AppScreen.AutomationEngine },
                             onOpenProductivitySuite = { currentScreen = AppScreen.ProductivitySuite() },
-                            onOpenSmartSearch = { path -> currentScreen = AppScreen.SmartSearch(path) }
+                            onOpenSmartSearch = { path -> currentScreen = AppScreen.SmartSearch(path) },
+                            onOpenStorageCleanup = { currentScreen = AppScreen.StorageCleanup }
                         )
                     }
                     is AppScreen.TextEditor -> {
@@ -139,6 +142,11 @@ class MainActivity : ComponentActivity() {
                                     else -> currentScreen = AppScreen.HexEditor(fileItem.path)
                                 }
                             }
+                        )
+                    }
+                    is AppScreen.StorageCleanup -> {
+                        StorageCleanupView(
+                            onBack = { currentScreen = AppScreen.Explorer }
                         )
                     }
                 }

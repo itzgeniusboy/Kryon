@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.kryon.filemanager.core.AccessMode
 import com.kryon.filemanager.core.FileItem
+import com.kryon.filemanager.features.media.MediaPlaybackState
+import com.kryon.filemanager.features.media.MediaPlaybackService
 import com.kryon.filemanager.core.FileSystemProvider
 import com.kryon.filemanager.features.archive.ArchiveManager
 import com.kryon.filemanager.features.copilot.AiCopilotFab
@@ -83,7 +85,8 @@ fun ExplorerView(
     onOpenNetworkTools: () -> Unit,
     onOpenAutomationEngine: () -> Unit,
     onOpenProductivitySuite: () -> Unit,
-    onOpenSmartSearch: (String) -> Unit
+    onOpenSmartSearch: (String) -> Unit,
+    onOpenStorageCleanup: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     val configuration = LocalConfiguration.current
@@ -516,6 +519,17 @@ fun ExplorerView(
                         onClick = {
                             coroutineScope.launch { drawerState.close() }
                             onOpenProductivitySuite()
+                        },
+                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                    )
+
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.CleaningServices, contentDescription = null) },
+                        label = { Text("Storage Cleanup") },
+                        selected = false,
+                        onClick = {
+                            coroutineScope.launch { drawerState.close() }
+                            onOpenStorageCleanup()
                         },
                         colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
                     )
@@ -1439,41 +1453,25 @@ fun ExplorerView(
                 ExplorerDialog.MEDIA_PLAYER -> {
                     val item = targetFile
                     if (item != null) {
-                        val mediaPlayer = remember { android.media.MediaPlayer() }
-                        var isPlaying by remember { mutableStateOf(false) }
-                        var currentPosition by remember { mutableStateOf(0) }
-                        var duration by remember { mutableStateOf(0) }
-                        var playbackSpeed by remember { mutableStateOf(1.0f) }
+                        val isPlaying by MediaPlaybackState.isPlaying.collectAsState()
+                        val currentPosition by MediaPlaybackState.currentPosition.collectAsState()
+                        val duration by MediaPlaybackState.duration.collectAsState()
+                        val playbackSpeed by MediaPlaybackState.playbackSpeed.collectAsState()
                         var isSpeedDropdownExpanded by remember { mutableStateOf(false) }
-                        
-                        LaunchedEffect(isPlaying) {
-                            if (isPlaying) {
-                                while (true) {
-                                    try {
-                                        currentPosition = mediaPlayer.currentPosition
-                                    } catch (e: Exception) {}
-                                    delay(250)
+
+                        LaunchedEffect(item) {
+                            if (MediaPlaybackState.currentTrackPath.value != item.path) {
+                                val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                                    action = MediaPlaybackService.ACTION_PLAY
+                                    putExtra(MediaPlaybackService.EXTRA_PATH, item.path)
+                                    putExtra(MediaPlaybackService.EXTRA_NAME, item.name)
+                                    putExtra(MediaPlaybackService.EXTRA_IS_VIDEO, item.isVideo)
                                 }
-                            }
-                        }
-                        
-                        DisposableEffect(item) {
-                            try {
-                                mediaPlayer.reset()
-                                mediaPlayer.setDataSource(item.path)
-                                mediaPlayer.prepare()
-                                duration = mediaPlayer.duration
-                                mediaPlayer.start()
-                                isPlaying = true
-                            } catch (e: Exception) {
-                                android.widget.Toast.makeText(context, "Playback error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                            
-                            onDispose {
-                                try {
-                                    mediaPlayer.stop()
-                                    mediaPlayer.release()
-                                } catch (e: Exception) {}
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
+                                } else {
+                                    context.startService(intent)
+                                }
                             }
                         }
 
@@ -1562,10 +1560,11 @@ fun ExplorerView(
                                         Slider(
                                             value = currentPosition.toFloat(),
                                             onValueChange = { newVal ->
-                                                try {
-                                                    mediaPlayer.seekTo(newVal.toInt())
-                                                    currentPosition = newVal.toInt()
-                                                } catch (e: Exception) {}
+                                                val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                                                    action = MediaPlaybackService.ACTION_SEEK
+                                                    putExtra(MediaPlaybackService.EXTRA_POSITION, newVal.toInt())
+                                                }
+                                                context.startService(intent)
                                             },
                                             valueRange = 0f..(if (duration > 0) duration.toFloat() else 100f),
                                             colors = SliderDefaults.colors(
@@ -1609,14 +1608,11 @@ fun ExplorerView(
                                                     DropdownMenuItem(
                                                         text = { Text("${speed}x") },
                                                         onClick = {
-                                                            try {
-                                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                                                                    val params = mediaPlayer.playbackParams
-                                                                    params.speed = speed
-                                                                    mediaPlayer.playbackParams = params
-                                                                    playbackSpeed = speed
-                                                                }
-                                                            } catch (e: Exception) {}
+                                                            val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                                                                action = MediaPlaybackService.ACTION_SPEED
+                                                                putExtra(MediaPlaybackService.EXTRA_SPEED, speed)
+                                                            }
+                                                            context.startService(intent)
                                                             isSpeedDropdownExpanded = false
                                                         }
                                                     )
@@ -1626,15 +1622,10 @@ fun ExplorerView(
 
                                         FloatingActionButton(
                                             onClick = {
-                                                try {
-                                                    if (mediaPlayer.isPlaying) {
-                                                        mediaPlayer.pause()
-                                                        isPlaying = false
-                                                    } else {
-                                                        mediaPlayer.start()
-                                                        isPlaying = true
-                                                    }
-                                                } catch (e: Exception) {}
+                                                val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                                                    action = if (isPlaying) MediaPlaybackService.ACTION_PAUSE else MediaPlaybackService.ACTION_RESUME
+                                                }
+                                                context.startService(intent)
                                             },
                                             containerColor = Color(0xFF00E5FF),
                                             contentColor = Color.Black,
@@ -1650,12 +1641,10 @@ fun ExplorerView(
 
                                         IconButton(
                                             onClick = {
-                                                try {
-                                                    mediaPlayer.pause()
-                                                    mediaPlayer.seekTo(0)
-                                                    currentPosition = 0
-                                                    isPlaying = false
-                                                } catch (e: Exception) {}
+                                                val intent = Intent(context, MediaPlaybackService::class.java).apply {
+                                                    action = MediaPlaybackService.ACTION_STOP
+                                                }
+                                                context.startService(intent)
                                             }
                                         ) {
                                             Icon(
