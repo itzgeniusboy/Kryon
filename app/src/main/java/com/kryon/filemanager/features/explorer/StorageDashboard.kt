@@ -1,13 +1,13 @@
 package com.kryon.filemanager.features.explorer
 
 import android.os.Environment
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,10 +15,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -26,64 +31,52 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kryon.filemanager.core.FileItem
 import com.kryon.filemanager.core.FileSystemProvider
+import com.kryon.filemanager.features.network.pressScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StorageDashboard(
     onNavigateToPath: (String) -> Unit,
     onOpenFile: (FileItem) -> Unit,
-    onOpenAdb: () -> Unit
+    onTabSelected: (Int) -> Unit, // 0 = Home, 1 = Files, 2 = Storage, 3 = Settings
+    searchQuery: String,
+    onSearchQueryChanged: (String) -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    
+    val context = LocalContext.current
+
     // Real Storage calculations
     var totalSpace by remember { mutableStateOf(1L) }
     var freeSpace by remember { mutableStateOf(0L) }
     var usedSpace by remember { mutableStateOf(0L) }
-    
+
     // Scanned items
-    var largeFiles by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var recentFiles by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
 
-    // Read real system space on start
+    // Read real system space on start & scan files
     LaunchedEffect(Unit) {
         val storageDir = Environment.getExternalStorageDirectory()
         totalSpace = storageDir.totalSpace
         freeSpace = storageDir.freeSpace
         usedSpace = totalSpace - freeSpace
-        
-        // Scan for actual large and recent files in primary storage in IO thread
+
         isScanning = true
         coroutineScope.launch(Dispatchers.IO) {
             try {
                 val filesList = mutableListOf<File>()
-                scanFilesRecursively(storageDir, filesList, maxDepth = 3)
-                
-                // Sort for large files
-                val sortedLarge = filesList
-                    .filter { !it.isDirectory }
-                    .sortedByDescending { it.length() }
-                    .take(4)
-                    .map { f ->
-                        FileItem(
-                            path = f.absolutePath,
-                            name = f.name,
-                            size = f.length(),
-                            isDirectory = false,
-                            lastModified = f.lastModified(),
-                            extension = f.extension
-                        )
-                    }
-                
-                // Sort for recently modified files
+                // Quick shallow scan for actual recent files
+                scanFilesShallow(storageDir, filesList, maxCount = 100)
+
                 val sortedRecent = filesList
-                    .filter { !it.isDirectory }
+                    .filter { !it.isDirectory && it.exists() }
                     .sortedByDescending { it.lastModified() }
-                    .take(4)
+                    .take(5)
                     .map { f ->
                         FileItem(
                             path = f.absolutePath,
@@ -96,7 +89,6 @@ fun StorageDashboard(
                     }
 
                 withContext(Dispatchers.Main) {
-                    largeFiles = sortedLarge
                     recentFiles = sortedRecent
                     isScanning = false
                 }
@@ -109,440 +101,446 @@ fun StorageDashboard(
         }
     }
 
+    // Format bytes utility
+    fun formatBytes(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+        return String.format(Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF09090C))
-            .padding(16.dp),
+            .background(Color(0xFF090B10))
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Welcome Card
+        // Spacing at top to leave room for the title and floating search bar
         item {
-            Column(modifier = Modifier.padding(bottom = 4.dp)) {
-                Text(
-                    text = "Kryon Tool Suite",
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color.White,
-                    fontSize = 24.sp
-                )
-                Text(
-                    text = "All-in-one developer workspace",
-                    color = Color.Gray,
-                    fontSize = 12.sp
-                )
-            }
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // Storage Usage Segmented Progress Bar & Legend
+        // --- TITLE ---
         item {
-            Card(
+            Text(
+                text = "Kryon",
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White,
+                fontSize = 32.sp,
+                fontFamily = FontFamily.SansSerif,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+        }
+
+        // --- FLOATING GLASS SEARCH BAR WITH BLUR ---
+        item {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.2f), RoundedCornerShape(12.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F13))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "STORAGE CAPACITY",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "${usedSpace / 1024 / 1024 / 1024} GB / ${totalSpace / 1024 / 1024 / 1024} GB Used",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            color = Color(0xFF00E5FF)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Custom Multi-Segment Progress bar using Canvas
-                    val usedRatio = usedSpace.toFloat() / totalSpace.coerceAtLeast(1)
-                    val appsRatio = (usedRatio * 0.4f).coerceAtLeast(0.05f)
-                    val mediaRatio = (usedRatio * 0.35f).coerceAtLeast(0.05f)
-                    val docsRatio = (usedRatio * 0.15f).coerceAtLeast(0.03f)
-                    val otherRatio = (usedRatio - appsRatio - mediaRatio - docsRatio).coerceAtLeast(0.02f)
-
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(10.dp)
-                    ) {
-                        val width = size.width
-                        val height = size.height
-                        val corner = CornerRadius(5.dp.toPx(), 5.dp.toPx())
-
-                        // Background Track
-                        drawRoundRect(
-                            color = Color(0xFF1E1E24),
-                            size = Size(width, height),
-                            cornerRadius = corner
-                        )
-
-                        var startOffset = 0f
-
-                        // 1. Apps (Green)
-                        val appsW = width * appsRatio
-                        drawRoundRect(
-                            color = Color(0xFF4CAF50),
-                            topLeft = Offset(startOffset, 0f),
-                            size = Size(appsW, height),
-                            cornerRadius = corner
-                        )
-                        startOffset += appsW
-
-                        // 2. Media (Cyan)
-                        val mediaW = width * mediaRatio
-                        drawRoundRect(
-                            color = Color(0xFF00E5FF),
-                            topLeft = Offset(startOffset, 0f),
-                            size = Size(mediaW, height),
-                            cornerRadius = corner
-                        )
-                        startOffset += mediaW
-
-                        // 3. Documents (Amber)
-                        val docsW = width * docsRatio
-                        drawRoundRect(
-                            color = Color(0xFFFFB300),
-                            topLeft = Offset(startOffset, 0f),
-                            size = Size(docsW, height),
-                            cornerRadius = corner
-                        )
-                        startOffset += docsW
-
-                        // 4. Cache / System (Purple)
-                        val otherW = width * otherRatio
-                        drawRoundRect(
-                            color = Color(0xFF7E57C2),
-                            topLeft = Offset(startOffset, 0f),
-                            size = Size(otherW, height),
-                            cornerRadius = corner
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Color Legend Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        LegendItem("Apps", Color(0xFF4CAF50))
-                        LegendItem("Media", Color(0xFF00E5FF))
-                        LegendItem("Documents", Color(0xFFFFB300))
-                        LegendItem("Other/Cache", Color(0xFF7E57C2))
-                    }
-                }
-            }
-        }
-
-        // Quick Access Bookmark Grid
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "QUICK MOUNTING PATHS",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Gray
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    BookmarkCard(
-                        title = "Android data",
-                        path = "${FileSystemProvider.getPrimaryStoragePath()}/Android/data",
-                        icon = Icons.Default.CloudQueue,
-                        color = Color(0xFF00E5FF),
-                        modifier = Modifier.weight(1f),
-                        onClick = onNavigateToPath
-                    )
-                    BookmarkCard(
-                        title = "Android obb",
-                        path = "${FileSystemProvider.getPrimaryStoragePath()}/Android/obb",
-                        icon = Icons.Default.SdCard,
-                        color = Color(0xFFFFB300),
-                        modifier = Modifier.weight(1f),
-                        onClick = onNavigateToPath
-                    )
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    BookmarkCard(
-                        title = "Downloads",
-                        path = "${FileSystemProvider.getPrimaryStoragePath()}/Download",
-                        icon = Icons.Default.Download,
-                        color = Color(0xFF4CAF50),
-                        modifier = Modifier.weight(1f),
-                        onClick = onNavigateToPath
-                    )
-                    BookmarkCard(
-                        title = "Root Path",
-                        path = "/",
-                        icon = Icons.Default.Shield,
-                        color = Color(0xFFE91E63),
-                        modifier = Modifier.weight(1f),
-                        onClick = onNavigateToPath
-                    )
-                }
-            }
-        }
-
-        // Quick Tools Toolbar Shortcuts
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF14141A))
+                    .height(54.dp)
+                    .background(Color(0x1F121722), RoundedCornerShape(26.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(26.dp))
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
                 Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = Color(0xFF3BA7FF),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChanged,
+                        placeholder = {
+                            Text(
+                                "Search files and folders...",
+                                color = Color(0xFFAEB7C6),
+                                fontSize = 14.sp
+                            )
+                        },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // --- BEAUTIFUL STORAGE CARD (Liquid Glassmorphism) ---
+        item {
+            val usedPercent = if (totalSpace > 0) usedSpace.toFloat() / totalSpace else 0f
+            val animateProgress by animateFloatAsState(
+                targetValue = usedPercent,
+                animationSpec = tween(1500, easing = FastOutSlowInEasing),
+                label = "storageArcProgress"
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFF121722),
+                                Color(0xFF1E2638)
+                            )
+                        ),
+                        RoundedCornerShape(32.dp)
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(32.dp))
+                    .padding(22.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1.2f)) {
+                        Text(
+                            "STORAGE INDEX",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF74D4FF)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = formatBytes(usedSpace),
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "of ${formatBytes(totalSpace)} occupied",
+                            color = Color(0xFFAEB7C6),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Storage trigger button
+                        Button(
+                            onClick = { onTabSelected(2) }, // Switch to Storage tab
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3BA7FF)),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                "Storage Details",
+                                fontSize = 12.sp,
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Circular animated storage gauge
+                    Box(
+                        modifier = Modifier
+                            .size(100.dp)
+                            .weight(0.8f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.size(88.dp)) {
+                            // Empty Track
+                            drawCircle(
+                                color = Color.White.copy(alpha = 0.05f),
+                                radius = size.width / 2,
+                                style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                            // Progress arc with glowing gradient
+                            drawArc(
+                                color = Color(0xFF3BA7FF),
+                                startAngle = -90f,
+                                sweepAngle = animateProgress * 360f,
+                                useCenter = false,
+                                style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "${(usedPercent * 100).toInt()}%",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "USED",
+                                color = Color(0xFFAEB7C6),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- QUICK ACCESS SECTION ---
+        item {
+            Text(
+                "QUICK ACCESS",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFAEB7C6),
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+
+        item {
+            val rootStorage = FileSystemProvider.getPrimaryStoragePath()
+            val categories = listOf(
+                CategoryItem("Images", Icons.Default.Image, Color(0xFF3BA7FF), "$rootStorage/DCIM"),
+                CategoryItem("Videos", Icons.Default.Videocam, Color(0xFF74D4FF), "$rootStorage/Movies"),
+                CategoryItem("Documents", Icons.Default.InsertDriveFile, Color(0xFF8A7CFF), "$rootStorage/Documents"),
+                CategoryItem("Downloads", Icons.Default.Download, Color(0xFFE91E63), "$rootStorage/Download"),
+                CategoryItem("Audio", Icons.Default.MusicNote, Color(0xFF00E5FF), "$rootStorage/Music"),
+                CategoryItem("APK Files", Icons.Default.Android, Color(0xFF4CAF50), "$rootStorage/Download"),
+                CategoryItem("Archives", Icons.Default.FolderZip, Color(0xFFFFB300), "$rootStorage/Download"),
+                CategoryItem("Recent", Icons.Default.History, Color(0xFF7E57C2), rootStorage)
+            )
+
+            // Grid of categories (2 columns, 4 rows)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (row in 0 until 4) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val item1 = categories[row * 2]
+                        val item2 = categories[row * 2 + 1]
+
+                        CategoryCard(
+                            item = item1,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                if (item1.title == "Recent") {
+                                    onTabSelected(2) // open Storage analysis
+                                } else {
+                                    onNavigateToPath(item1.targetPath)
+                                }
+                            }
+                        )
+
+                        CategoryCard(
+                            item = item2,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                onNavigateToPath(item2.targetPath)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // --- RECENT FILES (Beautiful Floating Cards) ---
+        item {
+            Text(
+                "RECENT FILES",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFAEB7C6),
+                modifier = Modifier.padding(start = 6.dp, top = 8.dp)
+            )
+        }
+
+        if (isScanning) {
+            item {
+                Box(modifier = Modifier.fillMaxWidth().height(100.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF3BA7FF))
+                }
+            }
+        } else if (recentFiles.isEmpty()) {
+            item {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceAround
+                        .height(100.dp)
+                        .background(Color(0xFF121722), RoundedCornerShape(20.dp)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    QuickToolItem("ADB Wireless", Icons.Default.SettingsInputAntenna, onOpenAdb)
-                    QuickToolItem("Local Files", Icons.Default.FolderOpen) { onNavigateToPath(FileSystemProvider.getPrimaryStoragePath()) }
+                    Text(
+                        "No recently modified files found.",
+                        color = Color(0xFFAEB7C6),
+                        fontSize = 12.sp
+                    )
                 }
             }
-        }
-
-        // Recently Scanned Files / Large Files split tabs
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "SMART FILE EXPLORER (LARGEST FILES)",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Gray
-                )
-
-                if (isScanning) {
-                    Box(modifier = Modifier.fillMaxWidth().height(100.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFF00E5FF))
-                    }
-                } else if (largeFiles.isEmpty()) {
-                    Text("No large files found. Scan directories to index storage.", fontSize = 12.sp, color = Color.Gray)
-                } else {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F13))
+        } else {
+            items(recentFiles) { file ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pressScale()
+                        .clickable { onOpenFile(file) }
+                        .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(20.dp)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF121722)),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            largeFiles.forEach { file ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onOpenFile(file) }
-                                        .padding(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.InsertDriveFile,
-                                        contentDescription = null,
-                                        tint = Color(0xFF00E5FF),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = file.name,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = file.path,
-                                            color = Color.Gray,
-                                            fontSize = 9.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "${file.size / 1024 / 1024} MB",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp,
-                                        color = Color(0xFFFFB300)
-                                    )
-                                }
-                                Divider(color = Color(0x11FFFFFF))
-                            }
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(Color(0x113BA7FF), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = when (file.extension.lowercase()) {
+                                    "jpg", "jpeg", "png", "webp", "gif" -> Icons.Default.Image
+                                    "mp4", "mkv", "avi" -> Icons.Default.Videocam
+                                    "pdf", "txt", "doc", "docx" -> Icons.Default.Description
+                                    "mp3", "wav", "m4a", "ogg" -> Icons.Default.MusicNote
+                                    "apk" -> Icons.Default.Android
+                                    "zip", "rar", "7z", "tar", "gz" -> Icons.Default.FolderZip
+                                    else -> Icons.Default.InsertDriveFile
+                                },
+                                contentDescription = null,
+                                tint = Color(0xFF3BA7FF),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = file.name,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = file.path,
+                                color = Color(0xFFAEB7C6),
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = formatBytes(file.size),
+                            color = Color(0xFF74D4FF),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
         }
 
-        // Recently Modified Files
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "RECENTLY ACCESSED OR MODIFIED",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Gray
-                )
-
-                if (isScanning) {
-                    Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Color(0xFFFFB300))
-                    }
-                } else if (recentFiles.isEmpty()) {
-                    Text("No recent files found in primary cache.", fontSize = 12.sp, color = Color.Gray)
-                } else {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F13))
-                    ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            recentFiles.forEach { file ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onOpenFile(file) }
-                                        .padding(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.History,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFFB300),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = file.name,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = file.path,
-                                            color = Color.Gray,
-                                            fontSize = 9.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Divider(color = Color(0x11FFFFFF))
-                            }
-                        }
-                    }
-                }
-            }
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
 
-@Composable
-fun LegendItem(label: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .background(color, RoundedCornerShape(2.dp))
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(text = label, fontSize = 10.sp, color = Color.LightGray)
-    }
-}
+data class CategoryItem(
+    val title: String,
+    val icon: ImageVector,
+    val color: Color,
+    val targetPath: String
+)
 
 @Composable
-fun BookmarkCard(
-    title: String,
-    path: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color,
+fun CategoryCard(
+    item: CategoryItem,
     modifier: Modifier = Modifier,
-    onClick: (String) -> Unit
+    onClick: () -> Unit
 ) {
     Card(
         modifier = modifier
-            .clickable { onClick(path) }
-            .border(1.dp, Color(0x11FFFFFF), RoundedCornerShape(8.dp)),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF111116))
+            .height(72.dp)
+            .pressScale()
+            .clickable(onClick = onClick)
+            .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(20.dp)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF121722)),
+        shape = RoundedCornerShape(20.dp)
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = color,
-                modifier = Modifier.size(20.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(item.color.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = item.icon,
+                    contentDescription = item.title,
+                    tint = item.color,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
             Spacer(modifier = Modifier.width(10.dp))
             Column {
                 Text(
-                    text = title,
+                    text = item.title,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = Color.White
+                    color = Color.White,
+                    fontSize = 13.sp
                 )
                 Text(
-                    text = path.split("/").last().ifEmpty { "/" },
-                    fontSize = 9.sp,
-                    color = Color.Gray,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    text = "Browse",
+                    color = Color(0xFFAEB7C6),
+                    fontSize = 10.sp
                 )
             }
         }
     }
 }
 
-@Composable
-fun QuickToolItem(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = Color(0xFF00E5FF),
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(text = label, fontSize = 11.sp, color = Color.LightGray)
-    }
-}
-
-// Scans storage folders recursively for files to build dashboard shortcuts
-private fun scanFilesRecursively(dir: File, result: MutableList<File>, maxDepth: Int, currentDepth: Int = 0) {
-    if (currentDepth > maxDepth) return
+private fun scanFilesShallow(dir: File, result: MutableList<File>, maxCount: Int) {
     try {
-        val files = dir.listFiles() ?: return
-        for (f in files) {
-            if (f.name.startsWith(".")) continue
-            if (f.isDirectory) {
-                // Scan directories recursively
-                scanFilesRecursively(f, result, maxDepth, currentDepth + 1)
+        val queue = LinkedList<File>()
+        queue.add(dir)
+
+        var count = 0
+        while (queue.isNotEmpty() && count < maxCount) {
+            val current = queue.poll() ?: continue
+            if (current.isDirectory) {
+                val children = current.listFiles()
+                if (children != null) {
+                    for (child in children) {
+                        if (child.name.startsWith(".")) continue
+                        if (child.isFile) {
+                            result.add(child)
+                            count++
+                        } else {
+                            if (queue.size < 50) {
+                                queue.add(child)
+                            }
+                        }
+                    }
+                }
             } else {
-                result.add(f)
+                result.add(current)
+                count++
             }
         }
     } catch (e: Exception) {
-        // Ignore permission or file exceptions
+        // Safe check
     }
 }

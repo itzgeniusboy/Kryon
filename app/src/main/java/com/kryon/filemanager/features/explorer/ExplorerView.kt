@@ -54,9 +54,15 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.kryon.filemanager.features.settings.SettingsView
+import com.kryon.filemanager.features.cleanup.StorageCleanupView
 
 enum class ActivePane {
     A, B
+}
+
+enum class KryonTab {
+    HOME, FILES, STORAGE, SETTINGS
 }
 
 enum class ExplorerDialog {
@@ -136,6 +142,9 @@ fun ExplorerView(
     var showContextActionSheet by remember { mutableStateOf(false) }
     var showModeSelectionSheet by remember { mutableStateOf(false) }
     var showDashboard by remember { mutableStateOf(true) }
+    var activeTab by remember { mutableStateOf(KryonTab.HOME) }
+    var showHiddenFiles by remember { mutableStateOf(false) }
+    var recycleBinEnabled by remember { mutableStateOf(true) }
 
     // Operation logs
     var statusLog by remember { mutableStateOf("") }
@@ -164,13 +173,19 @@ fun ExplorerView(
         }
     }
 
-    // Intercept back presses to navigate backwards in the active pane's history
-    BackHandler(enabled = !showDashboard) {
-        if (activePane == ActivePane.A && backStackA.isNotEmpty()) {
-            pathA = backStackA.removeAt(backStackA.size - 1)
-        } else if (activePane == ActivePane.B && backStackB.isNotEmpty()) {
-            pathB = backStackB.removeAt(backStackB.size - 1)
+    // Intercept back presses to navigate backwards in the active pane's history or tabs
+    BackHandler(enabled = activeTab != KryonTab.HOME) {
+        if (activeTab == KryonTab.FILES) {
+            if (activePane == ActivePane.A && backStackA.isNotEmpty()) {
+                pathA = backStackA.removeAt(backStackA.size - 1)
+            } else if (activePane == ActivePane.B && backStackB.isNotEmpty()) {
+                pathB = backStackB.removeAt(backStackB.size - 1)
+            } else {
+                activeTab = KryonTab.HOME
+                showDashboard = true
+            }
         } else {
+            activeTab = KryonTab.HOME
             showDashboard = true
         }
     }
@@ -588,7 +603,8 @@ fun ExplorerView(
     ) {
         Scaffold(
             topBar = {
-                Column(
+                if (activeTab == KryonTab.FILES) {
+                    Column(
                     modifier = Modifier.background(
                         Brush.verticalGradient(
                             colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
@@ -768,6 +784,19 @@ fun ExplorerView(
                         }
                     }
                 }
+                }
+            },
+            bottomBar = {
+                CustomBottomNavigation(
+                    activeTab = activeTab,
+                    onTabSelected = { tab ->
+                        activeTab = tab
+                        showDashboard = (tab == KryonTab.HOME)
+                    },
+                    onFabClicked = {
+                        showCommandPalette = true
+                    }
+                )
             }
         ) { innerPadding ->
             Box(
@@ -776,88 +805,126 @@ fun ExplorerView(
                     .padding(innerPadding)
                     .background(Color(0xFF0A0A0E))
             ) {
-                if (showDashboard) {
-                    // Show Smart Storage Dashboard
-                    StorageDashboard(
-                        onNavigateToPath = { path ->
-                            if (activePane == ActivePane.A) pathA = path else pathB = path
-                            showDashboard = false
-                        },
-                        onOpenFile = { file ->
-                            targetFile = file
-                            showContextActionSheet = true
-                        },
-                        onOpenAdb = onOpenAdbSettings
-                    )
-                } else if (isLandscape) {
-                    // SIDE-BY-SIDE DUAL PANE VIEW FOR TABLETS
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // Pane A Box
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .border(
-                                    width = 1.5.dp,
-                                    color = if (activePane == ActivePane.A) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else Color.DarkGray.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(2.dp)
-                        ) {
-                            PaneList(
-                                files = filesA,
-                                path = pathA,
-                                onPathChanged = { navigateToPathA(it) },
-                                selectedPaths = selectedPaths,
-                                onOpenTextEditor = onOpenTextEditor,
-                                onOpenHexEditor = onOpenHexEditor,
-                                onOpenSqliteEditor = onOpenSqliteEditor,
-                                onOpenApkTools = onOpenApkTools,
-                                onFileLongClicked = { item ->
-                                    activePane = ActivePane.A
-                                    targetFile = item
-                                    showContextActionSheet = true
-                                },
-                                onFocused = { activePane = ActivePane.A },
-                                onOpenMediaPlayer = { item ->
-                                    targetFile = item
-                                    activeDialog = ExplorerDialog.MEDIA_PLAYER
+                when (activeTab) {
+                    KryonTab.HOME -> {
+                        StorageDashboard(
+                            onNavigateToPath = { path ->
+                                if (activePane == ActivePane.A) pathA = path else pathB = path
+                                activeTab = KryonTab.FILES
+                                showDashboard = false
+                            },
+                            onOpenFile = { file ->
+                                targetFile = file
+                                showContextActionSheet = true
+                            },
+                            onTabSelected = { tabIndex ->
+                                activeTab = when (tabIndex) {
+                                    0 -> KryonTab.HOME
+                                    1 -> KryonTab.FILES
+                                    2 -> KryonTab.STORAGE
+                                    else -> KryonTab.SETTINGS
                                 }
-                            )
-                        }
+                                showDashboard = (activeTab == KryonTab.HOME)
+                            },
+                            searchQuery = searchQuery,
+                            onSearchQueryChanged = { searchQuery = it }
+                        )
+                    }
+                    KryonTab.FILES -> {
+                        if (isLandscape) {
+                            // SIDE-BY-SIDE DUAL PANE VIEW FOR TABLETS
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                // Pane A Box
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .border(
+                                            width = 1.5.dp,
+                                            color = if (activePane == ActivePane.A) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else Color.DarkGray.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(2.dp)
+                                ) {
+                                    PaneList(
+                                        files = filesA,
+                                        path = pathA,
+                                        onPathChanged = { navigateToPathA(it) },
+                                        selectedPaths = selectedPaths,
+                                        onOpenTextEditor = onOpenTextEditor,
+                                        onOpenHexEditor = onOpenHexEditor,
+                                        onOpenSqliteEditor = onOpenSqliteEditor,
+                                        onOpenApkTools = onOpenApkTools,
+                                        onFileLongClicked = { item ->
+                                            activePane = ActivePane.A
+                                            targetFile = item
+                                            showContextActionSheet = true
+                                        },
+                                        onFocused = { activePane = ActivePane.A },
+                                        onOpenMediaPlayer = { item ->
+                                            targetFile = item
+                                            activeDialog = ExplorerDialog.MEDIA_PLAYER
+                                        }
+                                    )
+                                }
 
-                        // Pane B Box
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .border(
-                                    width = 1.5.dp,
-                                    color = if (activePane == ActivePane.B) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else Color.DarkGray.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(2.dp)
-                        ) {
+                                // Pane B Box
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .border(
+                                            width = 1.5.dp,
+                                            color = if (activePane == ActivePane.B) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else Color.DarkGray.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(2.dp)
+                                ) {
+                                    PaneList(
+                                        files = filesB,
+                                        path = pathB,
+                                        onPathChanged = { navigateToPathB(it) },
+                                        selectedPaths = selectedPaths,
+                                        onOpenTextEditor = onOpenTextEditor,
+                                        onOpenHexEditor = onOpenHexEditor,
+                                        onOpenSqliteEditor = onOpenSqliteEditor,
+                                        onOpenApkTools = onOpenApkTools,
+                                        onFileLongClicked = { item ->
+                                            activePane = ActivePane.B
+                                            targetFile = item
+                                            showContextActionSheet = true
+                                        },
+                                        onFocused = { activePane = ActivePane.B },
+                                        onOpenMediaPlayer = { item ->
+                                            targetFile = item
+                                            activeDialog = ExplorerDialog.MEDIA_PLAYER
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            // SINGLE PANE PORTRAIT VIEW
                             PaneList(
-                                files = filesB,
-                                path = pathB,
-                                onPathChanged = { navigateToPathB(it) },
+                                files = filteredFiles,
+                                path = currentPath,
+                                onPathChanged = { newPath ->
+                                    if (activePane == ActivePane.A) navigateToPathA(newPath) else navigateToPathB(newPath)
+                                },
                                 selectedPaths = selectedPaths,
                                 onOpenTextEditor = onOpenTextEditor,
                                 onOpenHexEditor = onOpenHexEditor,
                                 onOpenSqliteEditor = onOpenSqliteEditor,
                                 onOpenApkTools = onOpenApkTools,
                                 onFileLongClicked = { item ->
-                                    activePane = ActivePane.B
                                     targetFile = item
                                     showContextActionSheet = true
                                 },
-                                onFocused = { activePane = ActivePane.B },
+                                onFocused = {},
                                 onOpenMediaPlayer = { item ->
                                     targetFile = item
                                     activeDialog = ExplorerDialog.MEDIA_PLAYER
@@ -865,29 +932,26 @@ fun ExplorerView(
                             )
                         }
                     }
-                } else {
-                    // SINGLE PANE PORTRAIT VIEW
-                    PaneList(
-                        files = filteredFiles,
-                        path = currentPath,
-                        onPathChanged = { newPath ->
-                            if (activePane == ActivePane.A) navigateToPathA(newPath) else navigateToPathB(newPath)
-                        },
-                        selectedPaths = selectedPaths,
-                        onOpenTextEditor = onOpenTextEditor,
-                        onOpenHexEditor = onOpenHexEditor,
-                        onOpenSqliteEditor = onOpenSqliteEditor,
-                        onOpenApkTools = onOpenApkTools,
-                        onFileLongClicked = { item ->
-                            targetFile = item
-                            showContextActionSheet = true
-                        },
-                        onFocused = {},
-                        onOpenMediaPlayer = { item ->
-                            targetFile = item
-                            activeDialog = ExplorerDialog.MEDIA_PLAYER
-                        }
-                    )
+                    KryonTab.STORAGE -> {
+                        StorageCleanupView(
+                            onBack = {
+                                activeTab = KryonTab.HOME
+                                showDashboard = true
+                            }
+                        )
+                    }
+                    KryonTab.SETTINGS -> {
+                        SettingsView(
+                            onBack = {
+                                activeTab = KryonTab.HOME
+                                showDashboard = true
+                            },
+                            showHiddenFiles = showHiddenFiles,
+                            onShowHiddenFilesChanged = { showHiddenFiles = it },
+                            recycleBinEnabled = recycleBinEnabled,
+                            onRecycleBinChanged = { recycleBinEnabled = it }
+                        )
+                    }
                 }
 
                 if (isLoading && !showDashboard) {
@@ -2146,5 +2210,108 @@ fun PaneList(
                 Divider(color = Color(0x11FFFFFF), thickness = 0.5.dp)
             }
         }
+    }
+}
+
+@Composable
+fun CustomBottomNavigation(
+    activeTab: KryonTab,
+    onTabSelected: (KryonTab) -> Unit,
+    onFabClicked: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .background(Color(0xD9121722), RoundedCornerShape(32.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(32.dp))
+            .padding(vertical = 6.dp, horizontal = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            BottomTabItem(
+                icon = Icons.Default.Home,
+                label = "Home",
+                isSelected = activeTab == KryonTab.HOME,
+                onClick = { onTabSelected(KryonTab.HOME) }
+            )
+
+            BottomTabItem(
+                icon = Icons.Default.Folder,
+                label = "Files",
+                isSelected = activeTab == KryonTab.FILES,
+                onClick = { onTabSelected(KryonTab.FILES) }
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clickable(onClick = onFabClicked)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(Color(0xFF3BA7FF), Color(0xFF8A7CFF))
+                        ),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Bolt,
+                    contentDescription = "Quick Commands",
+                    tint = Color.Black,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            BottomTabItem(
+                icon = Icons.Default.PieChart,
+                label = "Storage",
+                isSelected = activeTab == KryonTab.STORAGE,
+                onClick = { onTabSelected(KryonTab.STORAGE) }
+            )
+
+            BottomTabItem(
+                icon = Icons.Default.Settings,
+                label = "Settings",
+                isSelected = activeTab == KryonTab.SETTINGS,
+                onClick = { onTabSelected(KryonTab.SETTINGS) }
+            )
+        }
+    }
+}
+
+@Composable
+fun RowScope.BottomTabItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val tintColor = if (isSelected) Color(0xFF3BA7FF) else Color(0xFFAEB7C6)
+
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tintColor,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            color = tintColor,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
